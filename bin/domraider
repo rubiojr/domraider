@@ -1,0 +1,276 @@
+#!/usr/bin/ruby
+
+require 'rubygems'
+require 'term/ansicolor'
+require 'highline/import'
+require 'domraider'
+require 'choice'
+
+#
+# Avoid locale specific issues
+#
+ENV['LC_NUMERIC'] = 'C'
+
+DOMU_INSTANCE = Domraider::DomU.new
+
+class String
+  include Term::ANSIColor
+
+  def humanize_bytes
+    m = self.to_f
+    units = %w[Bits Bytes MB GB TB PB]
+    while (m/1024.0) >= 1 
+      m = m/1024.0
+      units.shift
+    end
+    return m.to_s + " #{units[0]}"
+  end
+
+end
+
+def root?
+  `whoami`.chomp.strip.eql? 'root'
+end
+
+def ws(s)
+  "#{s} "
+end
+
+def create_raw(root)
+  puts "Creating a raw block device..." 
+  bd_path = ask(ws("Device path:".bold)) do |q|
+    q.responses[:not_valid] = 'RAW device does not exist'
+    q.validate  = lambda { |p| File.exist?(p) }
+  end
+
+  bd = Domraider::BlockDevice.new_raw(bd_path, :fe_dev => "sda#{DOMU_INSTANCE.block_devices.size + 1}")
+  DOMU_INSTANCE.block_devices << bd
+  DOMU_INSTANCE.root_bd = bd if root
+end
+
+def create_sparse(root)
+  puts "Creating a sparse image..." 
+  bd_path = ask(ws("Image path:".bold)) do |q|
+    q.responses[:not_valid] = "Invalid image path, file exists."
+    q.validate = lambda { |p| not File.exist?(p) }
+  end
+
+  bd_size = ask(ws("Image size (in MBytes):".bold), Integer) do |q|
+    q.responses[:not_valid] = "Invalid size."
+  end
+  bd = Domraider::BlockDevice.new_sparse(bd_path, bd_size, :fe_dev => "sda#{DOMU_INSTANCE.block_devices.size + 1}")
+  DOMU_INSTANCE.block_devices << bd
+  DOMU_INSTANCE.root_bd = bd if root
+end
+
+def create_lv(root)
+  bd_vgroup = nil
+  bd_name = nil
+  bd_size = nil
+  # Get de volume group
+  puts "Creating a new Logical Volume..."
+  puts "The following Volume Groups are available:\n\n"
+  Domraider::Util::vg_display.each do |vg|
+    vgs = Domraider::Util::vg_size(vg)
+    converted_size = vgs[1].to_s.humanize_bytes
+    puts "#{vg}".ljust(20 - vg.size) + " #{converted_size} Free"
+  end
+
+  puts "Where do you want to create the Logical Volume?\n\n"
+  vgname = ask(ws("VG Name:".bold)) do |q|
+    q.responses[:not_valid] = "Invalid Volume Group"
+    q.validate = lambda { |p| Domraider::Util::vg_display.include?(p) }
+  end
+  bd_vgroup = vgname
+  
+  # Get the logical volume name
+  lvname = ask(ws("LV Name to create?".bold)) do |q|
+    q.responses[:not_valid] = "Logical Volume already exists. Choose another name."
+    q.validate = lambda { |p| not Domraider::Util::lv_display.include?(p) }
+  end
+  bd_name = lvname
+
+  # Get the LV Size
+  lvsize = ask(ws("LV Size? (KB/GB/MB):".bold)) do |q|
+    q.validate = /^\d+?(K|KB|M|MB|G|GB)$/
+    q.responses[:not_valid] = "Invalid LV size specified."
+
+  end
+  bd_size = lvsize
+
+  bd = Domraider::BlockDevice.new_lv(bd_vgroup, bd_name, bd_size, :fe_dev => "sda#{DOMU_INSTANCE.block_devices.size + 1}")
+  DOMU_INSTANCE.block_devices << bd
+  DOMU_INSTANCE.root_bd = bd if root
+end
+
+def add_vif(first=true)
+  if first
+    q = "Add a Network Interface? "
+  else
+    q = "Add another Netwok Interface? "
+  end
+
+  if agree(ws(q.bold))
+    bridge = ask(ws("Network bridge to use:".bold))
+    DOMU_INSTANCE.network_devices << Domraider::Vif.new(:bridge => bridge)
+  else
+    return
+  end
+  add_vif(false)
+end
+
+def choose_bd(first=true)
+  puts "Adding the root block device..." if first
+  choose do |menu|
+    menu.header = "Choose the block device type".bold
+    menu.choice("RAW Device") { create_raw(first) }
+    menu.choice("Sparse Image") { create_sparse(first) }
+    menu.choice("Logical Volume") { create_lv(first) }
+  end
+  choose_bd(false) if agree("Add another block device? ")
+end
+
+def choose_hostname
+  hostname = ask(ws("Hostname:".bold)) do |q|
+    q.validate = /^[a-zA-Z0-9\-]+(\.([a-zA-Z0-9\-])+)*$/
+    q.responses[:not_valid] = "Invalid hostname."
+  end
+  DOMU_INSTANCE.hostname = hostname
+end
+
+def choose_mem
+  # get the memory allocated
+  memory = ask(ws("Memory assigned (in MBytes)".bold)) do |q|
+    q.default = '512'
+    q.validate = /^\d{1,5}?$/
+  end
+  
+  # get the max memory allocatable
+  maxmem = ask(ws("MaxMem assigned (in MBytes)".bold)) do |q|
+    q.default = '2048'
+    q.validate = /^\d{1,5}?$/
+  end
+
+  DOMU_INSTANCE.mem = memory
+  DOMU_INSTANCE.maxmem = maxmem
+end
+
+def add_file_swap
+  # get swap size
+  if agree(ws("Add swap file?".bold))
+    swap_size = ask(ws("Swap size (in MBytes)".bold), Integer) do |q|
+      q.default = 512
+    end
+    DOMU_INSTANCE.swap_file_size = swap_size
+  end
+end
+
+def wizard
+    
+  puts
+  puts "Well done, Luke. Going interactive..."
+  puts
+  Domraider.log.level = Logger::INFO
+  $stdout.sync = true
+
+  choose_hostname
+
+  #
+  # Choose the memory amount for the domu
+  #
+  choose_mem
+
+  #
+  # Add a block device
+  # 
+  choose_bd
+
+  #
+  # Add a VIF (optional)
+  # 
+  add_vif
+
+  add_file_swap
+
+  puts
+  cfg = DOMU_INSTANCE.config_string
+  File.open("#{DOMU_INSTANCE.hostname}.cfg", 'w') do |f|
+    f.puts cfg
+  end
+end
+
+def main
+  Choice.options do
+    header ''
+    header 'Available options:'
+
+    option :help do
+      long '--help'
+      short '-h'
+      desc 'Show this message'
+    end
+
+    option :interactive do
+      long '--interactive' 
+      short '-i'
+      desc 'Use the force, let domraider guide you'
+    end
+
+    option :get_support do
+      long '--get-support'
+      desc 'Get domraider support'
+      action do
+        puts '1. Stay calm'
+        sleep 1
+        puts '2. ' + "Mail to sistemas.linux@soporte.cti.csic.es (Ask for Sean :D)".bold
+        sleep 2 
+        puts '3. Get some beers'
+        sleep 1
+        puts '4. Have fun! (suicide?)'
+        exit
+      end
+    end
+    
+    option :version do
+      long '--version'
+      short '-v'
+      desc 'Show the software version'
+      action do
+        puts "\ndomraider version: %s (#{Domraider::CODENAME})\n" % Domraider::VERSION
+        puts
+        exit
+      end
+    end
+
+    option :template do
+      short '-t'
+      long '--template=TEMPLATE'
+      desc 'The OS template to use [REQUIRED]'
+    end
+  end
+
+  template_file = Choice.choices[:template]
+  if template_file.nil? or not File.exist?(template_file)
+    puts "\nTemplate (--template) argument is required.\n".bold if not Choice.choices[:help]
+    Choice.help
+  end
+
+  if not root?
+    puts "ERROR: You need to run this script as root."
+    exit 1
+  end
+
+  if Choice.choices[:interactive]
+    wizard
+  else
+    puts "Non interactive mode unsupported at the moment."
+    exit
+  end
+
+  DOMU_INSTANCE.template = template_file
+  print "Creating the DomU (this may take some time)... "
+  DOMU_INSTANCE.create
+  puts "Created."
+end
+
+main

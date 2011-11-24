@@ -1,0 +1,22 @@
+#!/usr/bin/ruby
+cfg = IO.read(ARGV[0])
+cfg.match(/vif\s*=\s*\[(.*)\]/)
+count = 0
+$1.chomp.strip.scan(/'.*?'/).each do |m|
+  ns = m.gsub(/'|,/,' ')
+  ns.match(/bridge\s*=\s*(.*?)\s/)
+  bridge = $1
+  ns.match(/mac\s*=\s*(.*)/)
+  mac = $1
+  File.open("ifcfg-eth#{count}",'w') do |f|
+    f.puts "DEVICE=eth#{count}"
+    f.puts "ONBOOT=yes"
+    f.puts "BOOTPROTO=static"
+    f.puts "HWADDR=#{mac}"
+    f.puts "## #{bridge}"
+    f.puts "IPADDR=X.X.X.X"
+    f.puts "NETMASK=255.255.255.0"
+    f.puts "GATEWAY=0.0.0.0"
+  end
+  count += 1
+end

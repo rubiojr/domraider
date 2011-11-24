@@ -1,0 +1,7 @@
+History.txt
+Manifest.txt
+README.txt
+Rakefile
+lib/domraider.rb
+bin/domraider
+bin/xencfg2ifcfg

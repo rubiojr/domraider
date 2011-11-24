@@ -1,0 +1,81 @@
+#!/usr/bin/ruby
+require 'rubygems'
+require 'term/ansicolor'
+require 'highline/import'
+
+begin
+  require 'domraider'
+rescue Exception
+  require "#{File.dirname(__FILE__) + '/../lib/domraider.rb'}"
+end
+
+class String
+  include Term::ANSIColor
+end
+
+def wizard
+  domu = DomRaider::DomU.new
+
+  lvm = LVM::LVM.new({:command => "/usr/bin/sudo /sbin/lvm"})
+  puts "Creating a new Logical Volume..."
+  print "The following Volume Groups are available:\n".bold.white
+  puts
+  lvm.volume_groups.each do |vg|
+    puts "#{vg.name} (Free #{vg.free_size})"
+  end
+  puts
+
+  # get volume group name
+  vg = nil
+  while not vg
+    vgname = ask "Where do you want to create the Logical Volume?".bold.white + "\nvg name: "
+    vg = lvm.volume_groups.find { |n| n.name == vgname }
+    puts "Invalid volume group".red.bold if vg.nil?
+  end
+  puts
+
+  lvname = nil
+  lv = ''
+  while not lv.nil?
+    lvname = ask "LV Name to create?".white.bold + "\nlv name: "
+    lv = vg.logical_volumes.find { |n| n.name == lvname }
+    puts "logical volume #{lvname} already exists".red.bold if not lv.nil?
+  end
+  puts
+
+  domu.block_devices[0] = "phy:#{vg.name}/#{lvname},sda1,w"
+
+  # get MAC
+  domu.network_devices[0] = "bridge=xenbr16,mac=#{DomRaider::Util.random_mac}"
+
+  # get hostname
+  hostname = nil
+  while (hostname = ask("Hostname for the new domU:".white.bold + "\nhostname: ")) !~ /^[a-zA-Z0-9\-]+(\.([a-zA-Z0-9\-])+)*$/
+    puts "Invalid hostname".red.bold
+  end
+  domu.hostname = hostname
+  puts
+
+  # get mem
+  mem = nil
+  while (mem = ask("Memory assigned (in MB):".white.bold + "\nmem: ")) !~ /^\d{1,5}?$/
+    puts "Invalid memory amount".red.bold
+  end
+  domu.mem = mem
+  puts
+  
+  # get maxmem
+  maxmem = nil
+  while (maxmem = ask("MaxMem Limit (in MB): ".white.bold + "\nmem: ")) !~ /^\d{1,5}?$/
+    puts "Invalid memory amount".red.bold
+  end
+  domu.maxmem = maxmem
+  puts
+  
+  return domu
+end
+
+exit 1  if not sanity_check
+File.open('/tmp/foo', 'w') do |f|
+  f.puts wizard.config_string
+end

@@ -1,0 +1,15 @@
+#!/usr/bin/ruby
+require 'lvm'
+require 'filemagic'
+require 'ptools'
+
+def sanity_check
+  %w[tar xm sudo lvm].each do |cmd|
+    if File.which(cmd).nil?
+      $stderr.puts "#{cmd} command not found"
+     return false
+    end
+  end
+  true
+end
+

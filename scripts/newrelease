@@ -1,0 +1,6 @@
+#!/usr/bin/ruby
+V = "0.3." + Time.now.strftime("%Y%m%d%H%M%S")
+`sed -i 's/VERSION = .*$/VERSION = "#{V}"/' lib/domraider.rb`
+
+`rake gem`
+`rake publish_gem`
